@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 600" width="900" height="600">
+  <!-- Drapeau du Sénégal — 3 bandes verticales + étoile verte centrée -->
+  <rect x="0" y="0" width="300" height="600" fill="#00853F"/>
+  <rect x="300" y="0" width="300" height="600" fill="#FDEF42"/>
+  <rect x="600" y="0" width="300" height="600" fill="#E31B23"/>
+  <!-- Étoile verte à 5 branches centrée -->
+  <polygon points="450,180 480,275 580,275 498,332 530,425 450,368 370,425 402,332 320,275 420,275" fill="#00853F"/>
+</svg>

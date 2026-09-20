@@ -1,0 +1,62 @@
+name: Build Windows EXE
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        shell: bash
+        run: npm install --no-audit --no-fund
+
+      - name: Approve install scripts
+        shell: bash
+        run: |
+          npm approve-scripts @prisma/client || true
+          npm approve-scripts electron || true
+          npm approve-scripts prisma || true
+          npm approve-scripts sharp || true
+          npm approve-scripts unrs-resolver || true
+          npm approve-scripts @parcel/watcher || true
+          npm approve-scripts @swc/core || true
+          npm approve-scripts @prisma/engines || true
+          npm approve-scripts es5-ext || true
+          npm install --no-audit --no-fund || true
+
+      - name: Create .env file
+        shell: bash
+        run: |
+          echo 'DATABASE_URL="file:./dev.db"' > .env
+
+      - name: Setup Prisma database
+        run: |
+          npx prisma generate
+          npx prisma db push
+          npx prisma db seed
+
+      - name: Build Electron application
+        run: npm run electron:build
+
+      - name: Upload installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: jang-ekol-windows
+          path: |
+            release/*.exe
+            release/*.blockmap
+          retention-days: 30
+          if-no-files-found: warn

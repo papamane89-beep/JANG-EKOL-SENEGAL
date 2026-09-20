@@ -1,0 +1,337 @@
+// JANG EKOL SENEGAL - Schéma de base de données complet
+// Application de gestion scolaire
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================
+// UTILISATEURS (Admin, Directeur, Enseignant)
+// ============================================================
+model Utilisateur {
+  id        String   @id @default(cuid())
+  login     String   @unique
+  motDePasse String
+  nom       String
+  prenom    String
+  role      String   @default("ENSEIGNANT") // ADMIN | DIRECTEUR | ENSEIGNANT
+  actif     Boolean  @default(true)
+  enseignantId String? @unique
+  enseignant   Enseignant? @relation(fields: [enseignantId], references: [id])
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ============================================================
+// ÉTABLISSEMENT (Paramètres école - enregistrement unique)
+// ============================================================
+model Etablissement {
+  id                 String  @id @default(cuid())
+  nom                String
+  typeEcole          String  @default("PUBLIQUE") // PUBLIQUE | PRIVEE
+  ia                 String  @default("Dakar") // Inspection d'Académie
+  ief                String  @default("Dakar Plateau") // Inspection Education Formation
+  telephone          String  @default("")
+  email              String  @default("")
+  adresse            String  @default("")
+  directeurNom       String  @default("")
+  logoPath           String? // logo de l'école
+  cachetPath         String? // cachet du directeur
+  signaturePath      String? // signature du directeur
+  anneeActiveId      String? @unique
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+}
+
+// ============================================================
+// CYCLES (Maternel, Élémentaire, Moyen, Secondaire)
+// ============================================================
+model Cycle {
+  id    String @id @default(cuid())
+  nom   String @unique // MATERNEL | ELEMENTAIRE | MOYEN | SECONDAIRE
+  ordre Int    @default(0)
+  classes    Classe[]
+  matieres   Matiere[]
+  parametres ParametreNotation[]
+}
+
+// ============================================================
+// ANNÉE SCOLAIRE
+// ============================================================
+model AnneeScolaire {
+  id         String  @id @default(cuid())
+  libelle    String  @unique // ex: 2024-2025
+  dateDebut  String  @default("")
+  dateFin    String  @default("")
+  active     Boolean @default(false)
+  periodesActives String @default("T1,T2,T3") // périodes actives séparées par virgule (T1,T2,T3 ou S1,S2)
+  classes    Classe[]
+  eleves     Eleve[]
+  notes      Note[]
+  bulletins  Bulletin[]
+  absences   Absence[]
+  paiements  Paiement[]
+  essais     Essai[]
+  createdAt  DateTime @default(now())
+}
+
+// ============================================================
+// ENSEIGNANTS
+// Spécialité Arabe/Anglais => affectation multiple classes
+// ============================================================
+model Enseignant {
+  id          String  @id @default(cuid())
+  prenom      String
+  nom         String
+  sexe        String  @default("M") // M | F
+  telephone   String  @default("")
+  email       String  @default("")
+  adresse     String  @default("")
+  fonction    String  @default("ADJOINT") // ADJOINT | ADJOINTE | DIRECTEUR | DIRECTRICE | SUPPLEANT | SUPPLEANTE
+  specialite  String  @default("FRANCAIS") // FRANCAIS | ARABE | ANGLAIS
+  grade       String  @default("")
+  actif       Boolean @default(true)
+  dateEmbauche String @default("")
+  utilisateur Utilisateur?
+  classesPrincipal Classe[]
+  affectations EnseignantClasse[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+// Relation N:N Enseignant <-> Classe (pour Arabe/Anglais multi-classes)
+model EnseignantClasse {
+  id           String @id @default(cuid())
+  enseignantId String
+  classeId     String
+  matiere      String  @default("") // matière enseignée
+  enseignant   Enseignant @relation(fields: [enseignantId], references: [id], onDelete: Cascade)
+  classe       Classe     @relation(fields: [classeId], references: [id], onDelete: Cascade)
+  @@unique([enseignantId, classeId])
+}
+
+// ============================================================
+// CLASSES (par étapes à l'élémentaire)
+// ============================================================
+model Classe {
+  id               String  @id @default(cuid())
+  nom              String  // CI, CP, CE1, CE2, CM1, CM2, 6e, 5e, 4e, 3e...
+  cycleId          String
+  cycle            Cycle  @relation(fields: [cycleId], references: [id])
+  anneeScolaireId  String
+  anneeScolaire    AnneeScolaire @relation(fields: [anneeScolaireId], references: [id])
+  etape            Int     @default(0) // 1=CI/CP, 2=CE1/CE2, 3=CM1/CM2 (élémentaire)
+  enseignantPrincipalId String?
+  enseignantPrincipal    Enseignant? @relation(fields: [enseignantPrincipalId], references: [id])
+  capacite         Int     @default(40)
+  salle            String  @default("")
+  eleves           Eleve[]
+  affectations     EnseignantClasse[]
+  notes            Note[]
+  bulletins        Bulletin[]
+  absences         Absence[]
+  paiements        Paiement[]
+  essais           Essai[]
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+}
+
+// ============================================================
+// ÉLÈVES (inscription + répartition automatique)
+// ============================================================
+model Eleve {
+  id               String  @id @default(cuid())
+  matricule        String  @unique @default("")
+  prenom           String
+  nom              String
+  sexe             String  @default("M") // M | F
+  dateNaissance    String  @default("")
+  lieuNaissance    String  @default("")
+  adresse          String  @default("")
+  telephoneParent  String  @default("")
+  nomPere          String  @default("")
+  nomMere          String  @default("")
+  photoPath        String?
+  classeId         String?
+  classe           Classe?  @relation(fields: [classeId], references: [id])
+  anneeScolaireId  String
+  anneeScolaire    AnneeScolaire @relation(fields: [anneeScolaireId], references: [id])
+  redoublant       Boolean @default(false)
+  statut           String  @default("INSCRIT") // INSCRIT | AFFECTE
+  dateInscription  DateTime @default(now())
+  notes            Note[]
+  bulletins        Bulletin[]
+  absences         Absence[]
+  paiements        Paiement[]
+  essaiEleves      EssaiEleve[]
+  essaiNotes       EssaiNote[]
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+}
+
+// ============================================================
+// MATIÈRES (Domaines + Activités, par cycle)
+// ============================================================
+model Matiere {
+  id        String  @id @default(cuid())
+  cycleId   String
+  cycle     Cycle  @relation(fields: [cycleId], references: [id])
+  domaine   String  // LC | MATHS | ESVS | EPSA | ED_RELIG | ANGLAIS | (matière libre moyen/secondaire)
+  activite  String  // RESSOURCES | COMPETENCES | DDM | EDD | ARTS_PLAST | ED_MUSIC | ARABE | ANGLAIS
+  libelle   String  @default("") // libellé affiché (pour moyen/secondaire)
+  sur       Int     @default(10) // barème max
+  coefficient Float @default(1)
+  actif     Boolean @default(true)
+  optionnel Boolean @default(false) // Arabe/Anglais activables
+  ordre     Int     @default(0)
+  notes     Note[]
+  createdAt DateTime @default(now())
+
+  @@unique([cycleId, domaine, activite])
+}
+
+// Paramètres de notation par étape (élémentaire) - configurable par le directeur
+model ParametreNotation {
+  id        String  @id @default(cuid())
+  cycleId   String
+  cycle     Cycle  @relation(fields: [cycleId], references: [id], onDelete: Cascade)
+  etape     Int     // 1 | 2 | 3
+  domaine   String
+  activite  String
+  sur       Int     @default(10)
+  actif     Boolean @default(true)
+  @@unique([cycleId, etape, domaine, activite])
+}
+
+// ============================================================
+// NOTES (par élève, matière, classe, période)
+// ============================================================
+model Note {
+  id              String  @id @default(cuid())
+  eleveId        String
+  eleve          Eleve @relation(fields: [eleveId], references: [id], onDelete: Cascade)
+  matiereId      String
+  matiere        Matiere @relation(fields: [matiereId], references: [id])
+  classeId       String
+  classe         Classe @relation(fields: [classeId], references: [id], onDelete: Cascade)
+  anneeScolaireId String
+  anneeScolaire  AnneeScolaire @relation(fields: [anneeScolaireId], references: [id])
+  periode        String  // T1 | T2 | T3 | S1 | S2
+  valeur         Float   @default(0)
+  sur            Int     @default(10)
+  appreciation   String  @default("")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  @@unique([eleveId, matiereId, classeId, anneeScolaireId, periode])
+}
+
+// ============================================================
+// BULLETINS (générés par classe et période)
+// ============================================================
+model Bulletin {
+  id              String  @id @default(cuid())
+  eleveId        String
+  eleve          Eleve @relation(fields: [eleveId], references: [id], onDelete: Cascade)
+  classeId       String
+  classe         Classe @relation(fields: [classeId], references: [id], onDelete: Cascade)
+  anneeScolaireId String
+  anneeScolaire  AnneeScolaire @relation(fields: [anneeScolaireId], references: [id])
+  periode        String  // T1 | T2 | T3 | S1 | S2
+  total          Float   @default(0)
+  moyenne        Float   @default(0)
+  rang           Int     @default(0)
+  effectif       Int     @default(0)
+  appreciation   String  @default("")
+  decision       String  @default("") // PASSAGE | REDOUBLAGE
+  moyTrim1       Float   @default(0)
+  moyTrim2       Float   @default(0)
+  moyTrim3       Float   @default(0)
+  moyAnnuelle    Float   @default(0)
+  rangAnnuel     Int     @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  @@unique([eleveId, classeId, anneeScolaireId, periode])
+}
+
+// ============================================================
+// ABSENCES (registre d'appel mensuel / heures)
+// ============================================================
+model Absence {
+  id              String  @id @default(cuid())
+  eleveId        String
+  eleve          Eleve @relation(fields: [eleveId], references: [id], onDelete: Cascade)
+  classeId       String
+  classe         Classe @relation(fields: [classeId], references: [id], onDelete: Cascade)
+  anneeScolaireId String
+  anneeScolaire  AnneeScolaire @relation(fields: [anneeScolaireId], references: [id])
+  date           String  @default("") // YYYY-MM-DD
+  periode        String  @default("MATIN") // MATIN | APRESMIDI | JOURNEE
+  type           String  @default("ABSENCE") // ABSENCE | RETARD
+  justifiee      Boolean @default(false)
+  motif          String  @default("")
+  nbHeures       Int     @default(0) // pour moyen/secondaire
+  createdAt      DateTime @default(now())
+}
+
+// ============================================================
+// PAIEMENTS (masqué si école publique)
+// ============================================================
+model Paiement {
+  id              String  @id @default(cuid())
+  eleveId        String
+  eleve          Eleve @relation(fields: [eleveId], references: [id], onDelete: Cascade)
+  classeId       String
+  classe         Classe @relation(fields: [classeId], references: [id], onDelete: Cascade)
+  anneeScolaireId String
+  anneeScolaire  AnneeScolaire @relation(fields: [anneeScolaireId], references: [id])
+  montant        Float   @default(0)
+  date           String  @default("")
+  motif          String  @default("SCOLARITE") // SCOLARITE | INSCRIPTION | CANTINE | TRANSPORT
+  recuNumero     String  @default("")
+  createdAt      DateTime @default(now())
+}
+
+// ============================================================
+// ESSAIS (spécifique CM2 — évaluation d'admission)
+// Plusieurs essais par année, mêmes élèves, domaines fixes
+// ============================================================
+model Essai {
+  id              String   @id @default(cuid())
+  libelle         String   // ex: "Essai 1"
+  classeId        String
+  classe          Classe   @relation(fields: [classeId], references: [id], onDelete: Cascade)
+  anneeScolaireId String
+  anneeScolaire   AnneeScolaire @relation(fields: [anneeScolaireId], references: [id])
+  date            String   @default("")
+  numero          Int      @default(1)
+  eleves          EssaiEleve[]
+  notes           EssaiNote[]
+  createdAt       DateTime @default(now())
+}
+
+model EssaiEleve {
+  id        String @id @default(cuid())
+  essaiId   String
+  essai     Essai  @relation(fields: [essaiId], references: [id], onDelete: Cascade)
+  eleveId   String
+  eleve     Eleve  @relation(fields: [eleveId], references: [id], onDelete: Cascade)
+  @@unique([essaiId, eleveId])
+}
+
+model EssaiNote {
+  id        String  @id @default(cuid())
+  essaiId   String
+  essai     Essai   @relation(fields: [essaiId], references: [id], onDelete: Cascade)
+  eleveId   String
+  eleve     Eleve   @relation(fields: [eleveId], references: [id], onDelete: Cascade)
+  domaine   String  // LC | MATHS | ESVS | EPSA | ED_RELIG
+  activite  String  // Ressources | Compétences | DDM | EDD | Arts.Plast | Arabe
+  valeur    Float   @default(0)
+  sur       Int     @default(10)
+  @@unique([essaiId, eleveId, domaine, activite])
+}

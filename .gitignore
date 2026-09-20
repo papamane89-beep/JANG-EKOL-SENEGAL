@@ -1,0 +1,72 @@
+# Dépendances
+node_modules/
+.pnp
+.pnp.js
+
+# Next.js
+.next/
+out/
+build/
+dist/
+
+# Electron
+release/
+
+# Base de données (⚠️ ne PAS pousser)
+prisma/dev.db
+prisma/dev.db-journal
+prisma/*.db
+prisma/*.db-journal
+db/
+*.db
+*.db-journal
+
+# Environnement (⚠️ ne PAS pousser)
+.env
+.env.local
+.env.production
+.env.development
+.env*.local
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+dev.log
+server.log
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Cache
+.cache/
+.temp/
+.tmp/
+.eslintcache
+
+# Build artifacts
+*.tsbuildinfo
+next-env.d.ts
+builder-effective-config.yaml
+
+# Dossiers internes
+.zscripts/
+mini-services/
+examples/
+skills/
+tests/
+upload/
+agent-ctx/
+tool-results/
+BUILD-EXE.md
+GITHUB-ACTIONS.md
+download/
