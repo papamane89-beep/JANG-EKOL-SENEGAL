@@ -1,183 +1,126 @@
-// =====================================================================
-// JANG EKOL SENEGAL — Processus principal Electron
-// Lance le serveur Next.js (standalone) puis ouvre la fenêtre de l'app
-// =====================================================================
 /* eslint-disable */
-const { app, BrowserWindow, Menu, dialog } = require("electron");
+// =====================================================================
+// JANG EKOL SENEGAL — Processus principal Electron (Windows)
+// =====================================================================
+const { app, BrowserWindow, Menu, shell, dialog } = require("electron");
 const path = require("path");
 const fs = require("fs");
-const { spawn, execSync } = require("child_process");
+const { fork } = require("child_process");
+const http = require("http");
 
 let nextProcess = null;
 let mainWindow = null;
-const PORT = 3000;
 
-// ====== SYSTÈME DE LOGS VERS FICHIER ======
-const logDir = path.join(app.getPath("userData"), "logs");
-if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
-const logFile = path.join(logDir, `jang-ekol-${new Date().toISOString().slice(0, 10)}.log`);
+const PORT = 3456;
 
+// --- Logger simple (fichier + console) ---
 function log(msg) {
   const line = `[${new Date().toISOString()}] ${msg}`;
   console.log(line);
-  try {
-    fs.appendFileSync(logFile, line + "\n");
-  } catch (e) {
-    // ignore
-  }
 }
 
-log("=== Démarrage de JANG EKOL SENEGAL ===");
-log("userData: " + app.getPath("userData"));
-log("execPath: " + process.execPath);
-log("platform: " + process.platform);
-log("isPackaged: " + app.isPackaged);
+function setupEnvironment() {
+  const userDataDir = app.getPath("userData");
+  fs.mkdirSync(userDataDir, { recursive: true });
 
-// ====== ÉTAPE 1 : INITIALISER LA BASE DE DONNÉES ======
-function initDatabase() {
-  const dbPath = path.join(app.getPath("userData"), "jang-ekol.db");
-  log("Chemin base de données: " + dbPath);
+  const dbPath = path.join(userDataDir, "jang-ekol.db");
 
-  if (fs.existsSync(dbPath)) {
-    log("Base de données déjà existante — skip initialisation");
-    return true;
-  }
+  // Copier la DB de seed au premier lancement
+  if (!fs.existsSync(dbPath)) {
+    const seedPath = app.isPackaged
+      ? path.join(process.resourcesPath, "seed.db")
+      : path.join(__dirname, "..", "prisma", "dev.db");
 
-  log("Première exécution — création de la base de données...");
-
-  try {
-    // Méthode 1 : Utiliser better-sqlite3 directement (le plus robuste)
-    const createDbScript = path.join(
-      app.isPackaged ? process.resourcesPath : path.join(__dirname, ".."),
-      app.isPackaged ? "app" : "",
-      "electron",
-      "create-db.cjs"
-    );
-
-    log("Script create-db: " + createDbScript);
-    log("Script existe: " + fs.existsSync(createDbScript));
-
-    if (fs.existsSync(createDbScript)) {
-      // Lancer le script avec ELECTRON_RUN_AS_NODE
-      execSync(
-        `"${process.execPath}" "${createDbScript}" "${dbPath}"`,
-        {
-          env: {
-            ...process.env,
-            ELECTRON_RUN_AS_NODE: "1",
-            NODE_ENV: "production",
-          },
-          stdio: "pipe",
-          timeout: 30000,
-        }
-      );
-      log("✓ Base créée via create-db.cjs");
-      return true;
+    if (fs.existsSync(seedPath)) {
+      fs.copyFileSync(seedPath, dbPath);
+      log("✅ Base initialisée depuis : " + seedPath);
+    } else {
+      log("⚠️ Seed DB introuvable : " + seedPath);
     }
-  } catch (e) {
-    log("✗ Erreur create-db.cjs: " + e.message);
+  } else {
+    log("Base de données déjà existante — skip initialisation");
   }
 
-  // Méthode 2 : créer un fichier SQLite vide (Prisma le remplira au démarrage)
-  try {
-    log("Fallback : création d'un fichier SQLite vide...");
-    fs.writeFileSync(dbPath, Buffer.alloc(0));
-    log("✓ Fichier SQLite vide créé");
-    return true;
-  } catch (e) {
-    log("✗ Impossible de créer la base: " + e.message);
-    return false;
+  process.env.DATABASE_URL = `file:${dbPath.replace(/\\/g, "/")}`;
+  log("📁 Base de données : " + dbPath);
+
+  if (app.isPackaged) {
+    const prismaEnginePath = path.join(
+      process.resourcesPath,
+      "app.asar.unpacked",
+      "node_modules",
+      ".prisma",
+      "client",
+      "query_engine-windows.dll.node"
+    );
+    if (fs.existsSync(prismaEnginePath)) {
+      process.env.PRISMA_QUERY_ENGINE_LIBRARY = prismaEnginePath;
+      log("✅ Prisma engine : " + prismaEnginePath);
+    } else {
+      log("⚠️ Prisma engine introuvable : " + prismaEnginePath);
+    }
   }
+
+  process.env.ELECTRON_RUN = "1";
+  process.env.NODE_ENV = "production";
 }
 
-// ====== ÉTAPE 2 : DÉMARRER LE SERVEUR NEXT.JS ======
 function startNextServer() {
+  // ⚠️ CHEMIN CORRIGÉ : app.asar.unpacked (pas "app")
   const serverFile = app.isPackaged
-    ? path.join(process.resourcesPath, "app", ".next", "standalone", "server.js")
+    ? path.join(process.resourcesPath, "app.asar.unpacked", ".next", "standalone", "server.js")
     : path.join(__dirname, "..", ".next", "standalone", "server.js");
 
   log("Fichier serveur: " + serverFile);
   log("Serveur existe: " + fs.existsSync(serverFile));
 
   if (!fs.existsSync(serverFile)) {
-    log("✗ ERREUR: server.js introuvable!");
-    return false;
+    log("❌ ERREUR: server.js introuvable!");
+    return;
   }
 
-  const serverDir = path.dirname(serverFile);
-  const dbPath = path.join(app.getPath("userData"), "jang-ekol.db");
-  const dbUrl = "file:" + dbPath.replace(/\\/g, "/");
+  log("🚀 Démarrage Next.js...");
 
-  log("Dossier serveur: " + serverDir);
-  log("DATABASE_URL: " + dbUrl);
-
-  // ELECTRON_RUN_AS_NODE=1 : force l'exécutable Electron à agir comme Node.js
-  nextProcess = spawn(process.execPath, [serverFile], {
-    cwd: serverDir,
+  // ⚠️ fork() au lieu de spawn(process.execPath)
+  nextProcess = fork(serverFile, [], {
+    cwd: path.dirname(serverFile),
     env: {
       ...process.env,
-      ELECTRON_RUN_AS_NODE: "1",
       PORT: String(PORT),
       HOSTNAME: "127.0.0.1",
       NODE_ENV: "production",
-      DATABASE_URL: dbUrl,
+      DATABASE_URL: process.env.DATABASE_URL,
+      ELECTRON_RUN: "1",
+      NODE_PATH: app.isPackaged
+        ? path.join(process.resourcesPath, "app.asar.unpacked", "node_modules")
+        : path.join(__dirname, "..", "node_modules"),
     },
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: ["ignore", "pipe", "pipe", "ipc"],
   });
 
-  nextProcess.stdout?.on("data", (d) => {
-    const msg = d.toString().trim();
-    log("[next] " + msg);
-  });
-
-  nextProcess.stderr?.on("data", (d) => {
-    const msg = d.toString().trim();
-    log("[next-err] " + msg);
-  });
-
-  nextProcess.on("exit", (code) => {
-    log("Serveur Next.js arrêté (code " + code + ")");
-  });
-
-  nextProcess.on("error", (err) => {
-    log("✗ Erreur spawn serveur: " + err.message);
-  });
-
-  return true;
+  nextProcess.stdout?.on("data", (d) => log("[next] " + d.toString().trim()));
+  nextProcess.stderr?.on("data", (d) => log("[next] " + d.toString().trim()));
+  nextProcess.on("error", (err) => log("❌ Erreur Next.js : " + err.message));
+  nextProcess.on("exit", (code) => log(`⏹️  Next.js arrêté (code ${code})`));
 }
 
-// ====== ÉTAPE 3 : ATTENDRE QUE LE SERVEUR SOIT PRÊT ======
-function waitForServer(cb, attempts = 0) {
-  const http = require("http");
-  const url = `http://127.0.0.1:${PORT}`;
-
+function waitForServer(url, cb, attempts = 0) {
   const req = http.get(url, (res) => {
-    if (res.statusCode === 200 || res.statusCode === 302) {
-      log("✓ Serveur prêt (tentative " + (attempts + 1) + ")");
-      cb(true);
-    } else {
-      retry();
-    }
+    res.resume();
+    if (res.statusCode && res.statusCode < 500) return cb(true);
+    if (attempts < 120) setTimeout(() => waitForServer(url, cb, attempts + 1), 500);
+    else cb(false);
   });
-
-  req.on("error", () => retry());
-  req.setTimeout(2000, () => {
-    req.destroy();
-    retry();
+  req.on("error", () => {
+    if (attempts < 120) setTimeout(() => waitForServer(url, cb, attempts + 1), 500);
+    else cb(false);
   });
-
-  function retry() {
-    if (attempts < 120) {
-      setTimeout(() => waitForServer(cb, attempts + 1), 500);
-    } else {
-      log("✗ Serveur non prêt après 60 secondes");
-      cb(false);
-    }
-  }
+  req.setTimeout(2000, () => req.destroy());
 }
 
-// ====== ÉTAPE 4 : CRÉER LA FENÊTRE ======
 function createWindow() {
+  const iconPath = path.join(__dirname, "..", "public", "resources", "app-logo.ico");
+
   mainWindow = new BrowserWindow({
     width: 1440,
     height: 900,
@@ -186,47 +129,42 @@ function createWindow() {
     show: false,
     backgroundColor: "#1e3a8a",
     title: "JANG EKOL SENEGAL",
-    icon: path.join(
-      app.isPackaged ? process.resourcesPath : path.join(__dirname, ".."),
-      app.isPackaged ? "app" : "",
-      "public",
-      "resources",
-      "app-logo.ico"
-    ),
+    icon: fs.existsSync(iconPath) ? iconPath : undefined,
     webPreferences: {
-      preload: path.join(__dirname, "preload.cjs"),
+      preload: fs.existsSync(path.join(__dirname, "preload.cjs"))
+        ? path.join(__dirname, "preload.cjs")
+        : undefined,
       contextIsolation: true,
       nodeIntegration: false,
+      sandbox: false,
     },
   });
 
   mainWindow.maximize();
   mainWindow.once("ready-to-show", () => mainWindow.show());
 
-  waitForServer((ok) => {
-    if (ok) {
-      log("Chargement de l'URL: http://127.0.0.1:" + PORT);
-      mainWindow.loadURL("http://127.0.0.1:" + PORT);
-    } else {
-      log("✗ Affichage de la page d'erreur");
-      const logPath = logFile.replace(/\\/g, "/");
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (url.startsWith("http://localhost") || url.startsWith("http://127.0.0.1")) {
+      return { action: "allow" };
+    }
+    shell.openExternal(url);
+    return { action: "deny" };
+  });
+
+  waitForServer(`http://127.0.0.1:${PORT}`, (ok) => {
+    if (ok && mainWindow) {
+      log("✅ Serveur prêt");
+      mainWindow.loadURL(`http://127.0.0.1:${PORT}`);
+    } else if (mainWindow) {
+      log("❌ Le serveur n'a pas démarré");
       mainWindow.loadURL(
         "data:text/html;charset=utf-8," +
           encodeURIComponent(
-            `<html><head><meta charset="utf-8"><title>Erreur</title></head>` +
-              `<body style="font-family:Segoe UI,sans-serif;padding:40px;background:#1e3a8a;color:white;max-width:800px;margin:0 auto;">` +
-              `<h1 style="color:#fbbf24;">⚠ Erreur de démarrage</h1>` +
-              `<p>Le serveur local n'a pas pu démarrer.</p>` +
-              `<h3>Solutions :</h3>` +
-              `<ol>` +
-              `<li><b>Relancez l'application</b> (fermez et rouvrez)</li>` +
-              `<li>Vérifiez que le port 3000 n'est pas occupé</li>` +
-              `<li>Consultez les logs :</li>` +
-              `</ol>` +
-              `<p style="background:#000;color:#0f0;padding:15px;border-radius:8px;font-family:Consolas,monospace;font-size:12px;word-break:break-all;">` +
-              logPath + `</p>` +
-              `<p>Transmettez ce fichier log à l'assistance : <b>papamane89@gmail.com</b></p>` +
-              `</body></html>`
+            `<html><body style="font-family:sans-serif;padding:40px;background:#1e3a8a;color:white;">
+              <h1>❌ Erreur de démarrage</h1>
+              <p>Le serveur local n'a pas démarré.</p>
+              <p>Ouvrez les DevTools (Ctrl+Shift+I) pour voir les logs.</p>
+            </body></html>`
           )
       );
     }
@@ -235,7 +173,6 @@ function createWindow() {
   mainWindow.on("closed", () => (mainWindow = null));
 }
 
-// ====== MENU ======
 function buildMenu() {
   const template = [
     {
@@ -246,14 +183,6 @@ function buildMenu() {
         { type: "separator" },
         { role: "print", label: "Imprimer" },
         { type: "separator" },
-        {
-          label: "Ouvrir le dossier des logs",
-          click: () => {
-            const { shell } = require("electron");
-            shell.openPath(logDir);
-          },
-        },
-        { type: "separator" },
         { role: "quit", label: "Quitter" },
       ],
     },
@@ -263,41 +192,43 @@ function buildMenu() {
         { role: "togglefullscreen", label: "Plein écran" },
         { role: "zoomin", label: "Zoom +" },
         { role: "zoomout", label: "Zoom -" },
-        { role: "resetzoom", label: "Zoom reset" },
+        { role: "resetzoom", label: "Reset zoom" },
+      ],
+    },
+    {
+      label: "Aide",
+      submenu: [
+        {
+          label: "À propos",
+          click: () => {
+            dialog.showMessageBox(mainWindow, {
+              type: "info",
+              title: "À propos",
+              message: "JANG EKOL SENEGAL",
+              detail: `Version ${app.getVersion()}\nApplication de gestion scolaire`,
+              buttons: ["OK"],
+            });
+          },
+        },
       ],
     },
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
-// ====== CYCLE DE VIE ELECTRON ======
+// --- Logs au démarrage ---
+log("=== Démarrage de JANG EKOL SENEGAL ===");
+log("userData: " + app.getPath("userData"));
+log("execPath: " + process.execPath);
+log("platform: " + process.platform);
+log("isPackaged: " + app.isPackaged);
+
 app.whenReady().then(() => {
   log("Electron prêt — initialisation...");
-
-  // 1. Initialiser la base de données
-  const dbOk = initDatabase();
-  if (!dbOk) {
-    dialog.showErrorBox(
-      "Erreur base de données",
-      "Impossible d'initialiser la base de données.\n\nLogs : " + logFile
-    );
-  }
-
-  // 2. Démarrer le serveur Next.js
-  const serverOk = startNextServer();
-  if (!serverOk) {
-    dialog.showErrorBox(
-      "Erreur fatale",
-      "Le fichier server.js est introuvable. L'installation est peut-être corrompue.\n\nLogs : " + logFile
-    );
-    app.quit();
-    return;
-  }
-
-  // 3. Créer la fenêtre
+  setupEnvironment();
+  startNextServer();
   createWindow();
   buildMenu();
-
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
@@ -305,31 +236,13 @@ app.whenReady().then(() => {
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {
-    if (nextProcess) {
-      try {
-        if (process.platform === "win32") {
-          spawn("taskkill", ["/pid", nextProcess.pid, "/f", "/t"]);
-        } else {
-          nextProcess.kill();
-        }
-      } catch (e) {
-        log("Erreur fermeture serveur: " + e.message);
-      }
-    }
+    if (nextProcess) nextProcess.kill();
     app.quit();
   }
 });
 
 app.on("before-quit", () => {
-  if (nextProcess) {
-    try {
-      if (process.platform === "win32") {
-        spawn("taskkill", ["/pid", nextProcess.pid, "/f", "/t"]);
-      } else {
-        nextProcess.kill();
-      }
-    } catch (e) {
-      log("Erreur fermeture serveur: " + e.message);
-    }
-  }
+  if (nextProcess) { nextProcess.kill(); nextProcess = null; }
 });
+
+process.on("exit", () => { if (nextProcess) nextProcess.kill(); });
