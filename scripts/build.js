@@ -1,12 +1,15 @@
-/* eslint-disable @typescript-eslint/no-require-imports */
-// scripts/build.js — Build multiplateforme (Windows + Linux + macOS)
-// Compile Next.js puis copie tous les fichiers nécessaires vers standalone
+/* eslint-disable */
+// scripts/build.js — Build Windows-compatible (Prisma + sharp)
+// ⚠️ UN SEUL build Next.js, en mode Webpack (évite le bug Turbopack + Prisma)
 const { execSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 
 function copyDir(src, dest) {
-  if (!fs.existsSync(src)) return false;
+  if (!fs.existsSync(src)) {
+    console.warn(`   ⚠️  Source introuvable : ${src}`);
+    return false;
+  }
   fs.mkdirSync(dest, { recursive: true });
   for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
     const s = path.join(src, entry.name);
@@ -17,85 +20,90 @@ function copyDir(src, dest) {
   return true;
 }
 
-function copyFile(src, dest) {
-  if (!fs.existsSync(src)) return false;
+// ============================================================
+// 1. GÉNÉRER LE CLIENT PRISMA (AVANT next build)
+// ============================================================
+console.log("\n▶ 0/3 — Génération du client Prisma...");
+execSync("npx prisma generate", { stdio: "inherit", shell: true });
+
+const prismaEnginePath = "node_modules/.prisma/client/query_engine-windows.dll.node";
+if (!fs.existsSync(prismaEnginePath)) {
+  console.error("❌ query_engine-windows.dll.node introuvable après prisma generate");
+  process.exit(1);
+}
+const engineSize = fs.statSync(prismaEnginePath).size;
+console.log(`   ✅ Prisma engine : ${(engineSize / 1024 / 1024).toFixed(1)} Mo`);
+
+// ============================================================
+// 2. BUILD NEXT.JS (UN SEUL FOIS, EN WEBPACK)
+// ============================================================
+console.log("\n▶ 1/3 — Compilation Next.js (webpack)...");
+execSync("npx next build --webpack", { stdio: "inherit", shell: true });
+
+const standalone = ".next/standalone";
+if (!fs.existsSync(standalone)) {
+  console.error("❌ .next/standalone introuvable. Vérifiez output: 'standalone'.");
+  process.exit(1);
+}
+
+// ============================================================
+// 3. COPIE DES FICHIERS STATIQUES + PACKAGES NATIFS
+// ============================================================
+console.log("\n▶ 2/3 — Copie des fichiers statiques et packages natifs...");
+copyDir(".next/static", path.join(standalone, ".next", "static"));
+copyDir("public", path.join(standalone, "public"));
+
+const natives = [
+  ["node_modules/@prisma/client",  path.join(standalone, "node_modules", "@prisma", "client")],
+  ["node_modules/@prisma/engines", path.join(standalone, "node_modules", "@prisma", "engines")],
+  ["node_modules/.prisma",         path.join(standalone, "node_modules", ".prisma")],
+  ["node_modules/prisma",          path.join(standalone, "node_modules", "prisma")],
+  ["node_modules/sharp",           path.join(standalone, "node_modules", "sharp")],
+  ["node_modules/@img",            path.join(standalone, "node_modules", "@img")],
+];
+for (const [from, to] of natives) {
+  if (copyDir(from, to)) console.log(`   ✅ ${from}`);
+}
+
+if (fs.existsSync("prisma/schema.prisma")) {
+  const dest = path.join(standalone, "prisma", "schema.prisma");
   fs.mkdirSync(path.dirname(dest), { recursive: true });
-  fs.copyFileSync(src, dest);
-  return true;
+  fs.copyFileSync("prisma/schema.prisma", dest);
+  console.log("   ✅ prisma/schema.prisma");
 }
 
-console.log("1/6 — Compilation Next.js...");
-execSync("npx next build", { stdio: "inherit", cwd: process.cwd() });
+// ============================================================
+// 4. VÉRIFICATION FINALE
+// ============================================================
+console.log("\n▶ 3/3 — Vérification...");
 
-const standaloneDir = path.join(process.cwd(), ".next", "standalone");
-const nmStandalone = path.join(standaloneDir, "node_modules");
-
-console.log("2/6 — Copie .next/static vers standalone...");
-copyDir(
-  path.join(process.cwd(), ".next", "static"),
-  path.join(standaloneDir, ".next", "static")
-);
-
-console.log("3/6 — Copie public vers standalone...");
-copyDir(
-  path.join(process.cwd(), "public"),
-  path.join(standaloneDir, "public")
-);
-
-console.log("4/6 — Copie du client Prisma + engine binaire...");
-// @prisma/client (contient le runtime JS)
-copyDir(
-  path.join(process.cwd(), "node_modules", "@prisma", "client"),
-  path.join(nmStandalone, "@prisma", "client")
-);
-console.log("  ✓ @prisma/client copié");
-
-// .prisma (contient le client généré + engine binaire .node)
-copyDir(
-  path.join(process.cwd(), "node_modules", ".prisma"),
-  path.join(nmStandalone, ".prisma")
-);
-console.log("  ✓ .prisma (client généré + engine) copié");
-
-// Copier le schéma Prisma
-copyFile(
-  path.join(process.cwd(), "prisma", "schema.prisma"),
-  path.join(standaloneDir, "prisma", "schema.prisma")
-);
-console.log("  ✓ schema.prisma copié");
-
-console.log("5/6 — Copie de better-sqlite3 (pour create-db.cjs)...");
-copyDir(
-  path.join(process.cwd(), "node_modules", "better-sqlite3"),
-  path.join(nmStandalone, "better-sqlite3")
-);
-console.log("  ✓ better-sqlite3 copié");
-
-// Copier les dépendances natives de better-sqlite3
-const bindings = path.join(process.cwd(), "node_modules", "bindings");
-if (fs.existsSync(bindings)) {
-  copyDir(bindings, path.join(nmStandalone, "bindings"));
-  console.log("  ✓ bindings copié");
-}
-const fileUriToPath = path.join(process.cwd(), "node_modules", "file-uri-to-path");
-if (fs.existsSync(fileUriToPath)) {
-  copyDir(fileUriToPath, path.join(nmStandalone, "file-uri-to-path"));
-  console.log("  ✓ file-uri-to-path copié");
+const standaloneEngine = path.join(standalone, "node_modules", ".prisma", "client", "query_engine-windows.dll.node");
+if (fs.existsSync(standaloneEngine)) {
+  const size = fs.statSync(standaloneEngine).size;
+  console.log(`   ✅ Prisma engine dans le standalone : ${(size / 1024 / 1024).toFixed(1)} Mo`);
+} else {
+  console.error("   ❌ Prisma engine MANQUANT dans le standalone !");
+  process.exit(1);
 }
 
-console.log("6/6 — Création de la base template...");
-try {
-  // Créer une base template avec le schéma complet (pour le premier lancement)
-  execSync("npx prisma db push --accept-data-loss", {
-    stdio: "inherit",
-    cwd: process.cwd(),
-    env: { ...process.env, DATABASE_URL: "file:./db/jang-ekol-template.db" },
-  });
-  console.log("  ✓ Base template créée");
-} catch (e) {
-  console.log("  ⚠ Base template non créée (non bloquant) :", e.message);
+// Vérifier qu'il n'y a PAS de module hashed
+const chunksDir = path.join(standalone, ".next", "server", "chunks");
+if (fs.existsSync(chunksDir)) {
+  let hashedCount = 0;
+  for (const file of fs.readdirSync(chunksDir)) {
+    if (!file.endsWith(".js")) continue;
+    const content = fs.readFileSync(path.join(chunksDir, file), "utf8");
+    if (content.includes("@prisma/client-2c3a283f134fdcb6")) {
+      hashedCount++;
+    }
+  }
+  if (hashedCount > 0) {
+    console.error(`   ❌ ${hashedCount} fichier(s) contiennent le module hashed @prisma/client-2c3a283f134fdcb6`);
+    console.error("   → Webpack n'a pas correctement externalisé Prisma.");
+    process.exit(1);
+  } else {
+    console.log("   ✅ Aucun module hashed détecté");
+  }
 }
 
-console.log("");
-console.log("✓ Build terminé — dossier .next/standalone prêt");
-console.log("  Contient : Next.js + Prisma client + engine + better-sqlite3");
+console.log("\n✅ Build terminé — .next/standalone prêt.\n");

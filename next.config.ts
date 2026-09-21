@@ -14,7 +14,10 @@ const nextConfig: NextConfig = {
   },
   typescript: { ignoreBuildErrors: true },
   reactStrictMode: false,
-  serverExternalPackages: ["@prisma/client", "prisma", "sharp"],
+  // ⚠️ SUPPRIMÉ : "@prisma/client" de serverExternalPackages
+  // Sinon Turbopack génère un module hashed (@prisma/client-2c3a283f134fdcb6)
+  // qui n'existe nulle part.
+  serverExternalPackages: ["sharp"],
   images: { unoptimized: true },
 };
 
